@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 # @file HeapMemoryAnalyzer.py
-# @version 1.0.0
-# @ref https://github.com/VSkoshchuk/HeapMemoryAnalyzer
+# @version 1.0.2
+# @ref https://github.com/VSkoshchuk/SafeQueue
 #
 # MIT License
 # Copyright (c) 2023 VSkoshchuk skoschuk999@gmail.com

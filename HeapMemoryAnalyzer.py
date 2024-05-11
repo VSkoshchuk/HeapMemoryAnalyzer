@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # @file HeapMemoryAnalyzer.py
-# @version 1.0.2
+# @version 1.0.0
 # @ref https://github.com/VSkoshchuk/HeapMemoryAnalyzer
 #
 # MIT License

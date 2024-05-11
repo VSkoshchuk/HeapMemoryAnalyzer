@@ -2,7 +2,7 @@ HeapMemoryAnalyzer
 ==========================
 
 ## Summary
-Analyzer of heap memory operations for C/C++ programs. Detects: Memory Leak, Double Free. Determines the total number of the operations, and the maximum amount of heap memory used.
+Analyzer of heap memory operations for C/C++ programs. Detects: Memory Leak, Double Free. Determines the total number of the operations, and the maximum amount of heap memory used. As a result of work generates a file with analysis and accurate positions in logs where problems were detected
 
 ## Usage
 Here's a simple and clear example of using HeapMemoryAnalyzer. The analysis occurs over the logs obtained during the program ranning. To generate the logs that will be analyzed in the C/C ++ program, you need to override new/malloc and delete/free operations. The following example is given for C++ program:

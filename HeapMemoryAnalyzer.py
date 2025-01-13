@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # @file HeapMemoryAnalyzer.py
-# @version 1.0.0
+# @version 2.0.0
 # @ref https://github.com/VSkoshchuk/HeapMemoryAnalyzer
 #
 # MIT License
@@ -54,7 +54,7 @@
 import sys
 from typing import Optional
 from typing import Tuple
-
+import time
 
 DEFAULT_OUT_FILE_PATH = "mem_heap_analyze_info_with_logs.txt"
 
@@ -63,7 +63,7 @@ class MemAct:
     NEW_ACT = "_NEW_"
     DELETE_ACT = "_DELETE_"
 
-    def __init__(self, type:str, addr:str, mem_size:str, id:int):
+    def __init__(self, type:str, addr:str, mem_size:str, line:int):
         if type not in [MemAct.NEW_ACT, MemAct.DELETE_ACT]:
             raise Exception(f"Incorrect memory action type {type}")
         self.__type = type
@@ -72,7 +72,7 @@ class MemAct:
         except Exception as e:
             raise Exception(f"Incorrect memory address {addr}")
         self.__addr = addr
-        self.__id = id
+        self.__line = line
         try:
             self.__mem_size = int(mem_size, 10)
         except Exception as e:
@@ -90,15 +90,19 @@ class MemAct:
     def get_addr(self) -> str:
         return self.__addr
 
-    def get_id(self) -> int:
-        return self.__id
+    def get_line(self) -> int:
+        return self.__line
 
     def get_mem_size(self) -> int:
         return self.__mem_size
 
     def to_str(self):
-        return f"TYPE->{self.get_type()}, ADDR->{self.get_addr()}, MEM SIZE->{self.get_mem_size()}, ID->{self.get_id()}"
+        return f"TYPE->{self.get_type()}, ADDR->{self.get_addr()}, MEM SIZE->{self.get_mem_size()}, LINE->{self.get_line()}"
 
+class MemPair:
+    def __init__(self, new_act:MemAct, del_act:MemAct):
+        self.__new_act = new_act
+        self.__del_act = del_act
 
 class CorruptedMemInfo:
     def __init__(self, corrupted_acts:list[MemAct]):
@@ -145,7 +149,7 @@ class MemActsLogParser:
         print(f"MemActsLogParser: Extracting each memory action from logs")
         self.__mem_acts = self.__get_mem_acts()
         print(f"MemActsLogParser: Computing corrupted memory actions")
-        self.__corrupted_acts = self.__get_corrupted_mem_acts()
+        self.__paired_acts, self.__corrupted_acts = self.__get_corrupted_mem_acts()
         print(f"MemActsLogParser: Computing max heap usage and position in logs")
         self.__max_heap_size, self.__max_heap_pos = self.__get_max_heap_usage()
 
@@ -176,21 +180,6 @@ class MemActsLogParser:
             for double_free in corrupted_info.get_double_free_acts():
                 new_file.write(f"######## {double_free.to_str()}\n")
 
-            new_file.write(f"\n################ LOGS WITH INFORMATION ABOUT MEMORY CORRUPTION\n")
-            with open(self.__logs_file, 'r', encoding='utf-8', errors='ignore') as old_file:
-                log_lines = old_file.readlines()
-                for line_id in range(len(log_lines)):
-                    line = log_lines[line_id]
-                    if line_id+1 == self.get_max_heap_usage_pos():
-                        line = f"######## [MAX HEAP USAGE] [{self.get_max_heap_usage_size()}]   " + line
-                    action = self.__find_mem_action_by_line_id(corrupted_info.get_corrupted_acts(), line_id+1)
-                    if action is not None:
-                        if action.is_new():
-                            new_file.write("######## [MEMORY CORRUPTED] [LEAK]   " + line)
-                        elif action.is_delete():
-                            new_file.write("######## [MEMORY CORRUPTED] [DOUBLE FREE]  " + line)
-                    else:
-                        new_file.write(line)
             new_file.write(f"\n\n\n")
 
     def __get_mem_acts(self) -> list[MemAct]:
@@ -253,53 +242,63 @@ class MemActsLogParser:
             print(e)
             return None
 
-    def __get_corrupted_mem_acts(self) -> CorruptedMemInfo:
-        paired_acts = list()
-        for new_id in range(len(self.__mem_acts)):
-            if self.__mem_acts[new_id].is_delete():
-                continue
-            for del_id in range(new_id, len(self.__mem_acts)):
-                if self.__mem_acts[del_id].is_new() or del_id in paired_acts:
-                    continue
-                if self.__mem_acts[new_id].get_addr() == self.__mem_acts[del_id].get_addr():
-                    paired_acts.append(new_id)
-                    paired_acts.append(del_id)
-                    break
+    def __get_corrupted_mem_acts(self) -> Tuple[list[MemPair], CorruptedMemInfo]:
+        corrupted_acts = list()
+        tmp_acts = dict()
+        pairs = list()
 
-        corrupted = list()
         for act_id in range(len(self.__mem_acts)):
-            if act_id not in paired_acts:
-                corrupted.append(self.__mem_acts[act_id])
-        return CorruptedMemInfo(corrupted)
+            addr = self.__mem_acts[act_id].get_addr()
+            # If new act
+            if self.__mem_acts[act_id].is_new():
+                # If new act with same addr already exists
+                if addr in tmp_acts:
+                    # Add to corrupted acts
+                    corrupted_acts.append(tmp_acts[addr])
+                # Add new act to tmp acts
+                tmp_acts[addr] = self.__mem_acts[act_id]
+            # If delete act
+            elif self.__mem_acts[act_id].is_delete():
+                # If new act with same addr already exists
+                if addr in tmp_acts:
+                    # Then we found correct pair
+                    pairs.append(MemPair(tmp_acts[addr], self.__mem_acts[act_id]))
+                    tmp_acts.pop(addr)
+                else:
+                    # Else we found corrupted act
+                    corrupted_acts.append(self.__mem_acts[act_id])
+
+        for addr, act in tmp_acts.items():
+            corrupted_acts.append(act)
+
+        return pairs, CorruptedMemInfo(corrupted_acts)
 
     # returns max value, position in logs
     def __get_max_heap_usage(self) -> Tuple[int, int]:
+        tmp_acts = dict()
         max_usage_size = 0
         max_usage_pos = -1
         common_usage = 0
-        used_ids = list()
 
-        for id in range(len(self.__mem_acts)):
-            act = self.__mem_acts[id]
-            if act.is_new():
-                common_usage += act.get_mem_size()
-                if max_usage_size < common_usage:
-                    max_usage_size = common_usage
-                    max_usage_pos = act.get_id()
-            elif act.is_delete():
-                for rid in range(id-1, -1, -1):
-                    ract = self.__mem_acts[rid]
-                    if ract.is_new() and ract.get_addr() == act.get_addr():
-                        if act.get_id() not in used_ids:
-                            used_ids.append(act.get_id())
-                            common_usage -= ract.get_mem_size()
-                        else:
-                            break
+        for act_id in range(len(self.__mem_acts)):
+            addr = self.__mem_acts[act_id].get_addr()
+            if self.__mem_acts[act_id].is_new():
+                if addr not in tmp_acts:
+                    common_usage += self.__mem_acts[act_id].get_mem_size()
+                    if max_usage_size < common_usage:
+                        max_usage_size = common_usage
+                        max_usage_pos = self.__mem_acts[act_id].get_line()
+                tmp_acts[addr] = self.__mem_acts[act_id]
+            elif self.__mem_acts[act_id].is_delete():
+                if addr in tmp_acts:
+                    common_usage -= tmp_acts[addr].get_mem_size()
+                    tmp_acts.pop(addr)
+
         return max_usage_size, max_usage_pos
 
     def __find_mem_action_by_line_id(self, actions:list[MemAct], line_id) -> Optional[MemAct]:
         for action in actions:
-            if action.get_id() == line_id:
+            if action.get_line() == line_id:
                 return action
         return None
 
